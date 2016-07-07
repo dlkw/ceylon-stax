@@ -966,6 +966,111 @@ Boolean isNameChar(Character c)
     return false;
 }
 
+
+/*
+*00 00 FE FF 	UCS-4, big-endian machine (1234 order)
+*FF FE 00 00 	UCS-4, little-endian machine (4321 order)
+*00 00 FF FE 	UCS-4, unusual octet order (2143)
+*FE FF 00 00 	UCS-4, unusual octet order (3412)
+*FE FF ## ## 	UTF-16, big-endian
+*FF FE ## ## 	UTF-16, little-endian
+*EF BB BF 	UTF-8
+
+Without a Byte Order Mark:
+*00 00 00 3C 	UCS-4 or other encoding with a 32-bit code unit and ASCII characters encoded as ASCII values, in respectively big-endian (1234), little-endian (4321) and two unusual byte orders (2143 and 3412). The encoding declaration must be read to determine which of UCS-4 or other supported 32-bit encodings applies.
+*3C 00 00 00
+*00 00 3C 00
+*00 3C 00 00
+*00 3C 00 3F 	UTF-16BE or big-endian ISO-10646-UCS-2 or other encoding with a 16-bit code unit in big-endian order and ASCII characters encoded as ASCII values (the encoding declaration must be read to determine which)
+*3C 00 3F 00 	UTF-16LE or little-endian ISO-10646-UCS-2 or other encoding with a 16-bit code unit in little-endian order and ASCII characters encoded as ASCII values (the encoding declaration must be read to determine which)
+*3C 3F 78 6D 	UTF-8, ISO 646, ASCII, some part of ISO 8859, Shift-JIS, EUC, or any other 7-bit, 8-bit, or mixed-width encoding which ensures that the characters of ASCII have their normal positions, width, and values; the actual encoding declaration must be read to detect which of these applies, but since all of these encodings use the same bit patterns for the relevant ASCII characters, the encoding declaration itself may be read reliably
+*4C 6F A7 94 	EBCDIC (in some flavor; the full encoding declaration must be read to tell which code page is in use)
+*Other	UTF-8 without an encoding declaration, or else the data stream is mislabeled (lacking a required encoding declaration), corrupt, fragmentary, or enclosed in a wrapper of some kind
+*/
+
+void guessEncoding(Byte[4] start)
+{
+    if (start[0] == #3c.byte) {
+        if (start[1] == #3f.byte) {
+            // 3c 3f, UTF-8 without BOM
+        }
+        else if (start[1] == #00.byte) {
+            if (start[2] == #3f.byte) {
+                // 3c 00 3f, UTF-16LE without BOM
+            }
+            else if (start[2] == #00.byte) {
+                // 3c 00 00, maybe UTF-32LE without BOM
+            }
+            else {
+                // unknown
+            }
+        }
+    }
+    else if (start[0] == #fe.byte && start[1] == #ff.byte) {
+        if (start[2] == #00.byte && start[3] == #00.byte) {
+            // fe ff 00 00, mixed-endian UTF-32 with BOM
+        }
+        else {
+            // fe ff ## ##, UTF-16BE with BOM
+        }
+    }
+    else if (start[0] == #ff.byte && start[1] == #fe.byte) {
+        if (start[2] == #00.byte && start[3] == #00.byte) {
+            // ff fe 00 00, UTF-32LE with BOM
+        }
+        else {
+            // ff fe ## ##, UTF-16LE with BOM
+        }
+    }
+    else if (start[0] == #00.byte) {
+        if (start[1] == #3c.byte && start[2] == #00.byte) {
+            if (start[3] == #3f.byte) {
+                // 00 3c 00 3f, UTF-16BE without BOM, or similar
+            }
+            else if (start[3] == #00.byte) {
+                // 00 3c 00 00, mixed-endian UTF-32 without BOM
+            }
+            else {
+                // 00 3c 00 ##, unknown
+            }
+        }
+        else if (start[1] == #00.byte) {
+            if (start[2] == #fe.byte) {
+                // 00 00 fe (ff), UTF-32BE with BOM
+            }
+            else if (start[2] == #00.byte) {
+                if (start[3] == #3c.byte) {
+                    // 00 00 00 3c, UTF-32BE without BOM
+                }
+                else {
+                    // unknown
+                }
+            }
+            else if (start[2] == #3c.byte) {
+                // 00 00 3c (00), mixed-endian UTF-32 without BOM
+            }
+            else if (start[2] == #ff.byte) {
+                // 00 00 ff (fe), mixed-endian UTF-32 with BOM
+            }
+            else {
+                // unknown
+            }
+        }
+        else {
+            // unknown
+        }
+    }
+    else if (start[0] == #ef.byte && start[1] == #bb.byte && start[2] == #bf.byte) {
+        // ef bb bf, UTF-8 with BOM
+    }
+    else if (start[0] == #4c.byte && start[1] == #6f.byte && start[2] == #a7.byte && start[3] == #94.byte) {
+        // 4c 6f a7 94, EBCDIC
+    }
+    else {
+        // other, UTF-8 without XML decl
+    }
+}
+
 shared abstract class XMLEvent()
         of StartDocument | StartElement | EndElement | Characters | EntityReference | ProcessingInstruction | Comment | EndDocument | DTD | Attribute | Namespace
 {
