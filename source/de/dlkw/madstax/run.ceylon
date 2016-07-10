@@ -967,107 +967,145 @@ Boolean isNameChar(Character c)
 }
 
 
+class AdHocEncoding
+        of utf8WithoutBOM
+        | utf8WithBOM
+        | utf16beWithBOM
+        | utf16leWithBOM
+        | other
+{
+    shared new utf8WithoutBOM{}
+    shared new utf8WithBOM{}
+    shared new utf16beWithBOM{}
+    shared new utf16leWithBOM{}
+    shared new other{}
+}
+
 /*
-*00 00 FE FF 	UCS-4, big-endian machine (1234 order)
-*FF FE 00 00 	UCS-4, little-endian machine (4321 order)
-*00 00 FF FE 	UCS-4, unusual octet order (2143)
-*FE FF 00 00 	UCS-4, unusual octet order (3412)
-*FE FF ## ## 	UTF-16, big-endian
-*FF FE ## ## 	UTF-16, little-endian
-*EF BB BF 	UTF-8
+B*00 00 FE FF 	UCS-4, big-endian machine (1234 order)
+C*FF FE 00 00 	UCS-4, little-endian machine (4321 order)
+D*00 00 FF FE 	UCS-4, unusual octet order (2143)
+A*FE FF 00 00 	UCS-4, unusual octet order (3412)
+E*FE FF ## ## 	UTF-16, big-endian
+F*FF FE ## ## 	UTF-16, little-endian
+G*EF BB BF 	UTF-8
 
 Without a Byte Order Mark:
-*00 00 00 3C 	UCS-4 or other encoding with a 32-bit code unit and ASCII characters encoded as ASCII values, in respectively big-endian (1234), little-endian (4321) and two unusual byte orders (2143 and 3412). The encoding declaration must be read to determine which of UCS-4 or other supported 32-bit encodings applies.
-*3C 00 00 00
-*00 00 3C 00
-*00 3C 00 00
-*00 3C 00 3F 	UTF-16BE or big-endian ISO-10646-UCS-2 or other encoding with a 16-bit code unit in big-endian order and ASCII characters encoded as ASCII values (the encoding declaration must be read to determine which)
-*3C 00 3F 00 	UTF-16LE or little-endian ISO-10646-UCS-2 or other encoding with a 16-bit code unit in little-endian order and ASCII characters encoded as ASCII values (the encoding declaration must be read to determine which)
-*3C 3F 78 6D 	UTF-8, ISO 646, ASCII, some part of ISO 8859, Shift-JIS, EUC, or any other 7-bit, 8-bit, or mixed-width encoding which ensures that the characters of ASCII have their normal positions, width, and values; the actual encoding declaration must be read to detect which of these applies, but since all of these encodings use the same bit patterns for the relevant ASCII characters, the encoding declaration itself may be read reliably
-*4C 6F A7 94 	EBCDIC (in some flavor; the full encoding declaration must be read to tell which code page is in use)
+H*00 00 00 3C 	UCS-4 or other encoding with a 32-bit code unit and ASCII characters encoded as ASCII values, in respectively big-endian (1234), little-endian (4321) and two unusual byte orders (2143 and 3412). The encoding declaration must be read to determine which of UCS-4 or other supported 32-bit encodings applies.
+I*3C 00 00 00
+J*00 00 3C 00
+K*00 3C 00 00
+L*00 3C 00 3F 	UTF-16BE or big-endian ISO-10646-UCS-2 or other encoding with a 16-bit code unit in big-endian order and ASCII characters encoded as ASCII values (the encoding declaration must be read to determine which)
+M*3C 00 3F 00 	UTF-16LE or little-endian ISO-10646-UCS-2 or other encoding with a 16-bit code unit in little-endian order and ASCII characters encoded as ASCII values (the encoding declaration must be read to determine which)
+N*3C 3F 78 6D 	UTF-8, ISO 646, ASCII, some part of ISO 8859, Shift-JIS, EUC, or any other 7-bit, 8-bit, or mixed-width encoding which ensures that the characters of ASCII have their normal positions, width, and values; the actual encoding declaration must be read to detect which of these applies, but since all of these encodings use the same bit patterns for the relevant ASCII characters, the encoding declaration itself may be read reliably
+O*4C 6F A7 94 	EBCDIC (in some flavor; the full encoding declaration must be read to tell which code page is in use)
 *Other	UTF-8 without an encoding declaration, or else the data stream is mislabeled (lacking a required encoding declaration), corrupt, fragmentary, or enclosed in a wrapper of some kind
 */
 
-void guessEncoding(Byte[4] start)
+AdHocEncoding|ParseError guessEncoding(Byte[4] start)
 {
     if (start[0] == #3c.byte) {
         if (start[1] == #3f.byte) {
-            // 3c 3f, UTF-8 without BOM
+            // 3c 3f, N UTF-8 without BOM, charset decl unnecessary
+            return AdHocEncoding.utf8WithoutBOM;
         }
         else if (start[1] == #00.byte) {
             if (start[2] == #3f.byte) {
-                // 3c 00 3f, UTF-16LE without BOM
+                // 3c 00 3f, M UTF-16LE without BOM
+                return ParseError("detected 16bit ASCII-encoded <? in little endian order, but UTF-16LE (without BOM) unsupported");
             }
             else if (start[2] == #00.byte) {
-                // 3c 00 00, maybe UTF-32LE without BOM
+                // 3c 00 00, I maybe UTF-32LE without BOM
+                return ParseError("detected 32bit ASCII-encoded < in little endian order, but UTF-32LE (without BOM) unsupported");
             }
             else {
                 // unknown
+                return AdHocEncoding.other;
             }
+        }
+        else {
+            // unknown
+            return AdHocEncoding.other;
         }
     }
     else if (start[0] == #fe.byte && start[1] == #ff.byte) {
         if (start[2] == #00.byte && start[3] == #00.byte) {
-            // fe ff 00 00, mixed-endian UTF-32 with BOM
+            // fe ff 00 00, D mixed-endian UTF-32 with BOM
+            return ParseError("detected 32bit BOM in unusual order, but UTF-32 (with BOM) unsupported");
         }
         else {
-            // fe ff ## ##, UTF-16BE with BOM
+            // fe ff ## ##, E UTF-16BE with BOM, charset decl unnecessary
+            return AdHocEncoding.utf16beWithBOM;
         }
     }
     else if (start[0] == #ff.byte && start[1] == #fe.byte) {
         if (start[2] == #00.byte && start[3] == #00.byte) {
-            // ff fe 00 00, UTF-32LE with BOM
+            // ff fe 00 00, C UTF-32LE with BOM
+            return ParseError("detected 32bit BOM in little endian order, UTF-32LE (with BOM) unsupported");
         }
         else {
-            // ff fe ## ##, UTF-16LE with BOM
+            // ff fe ## ##, F UTF-16LE with BOM, charset decl unnecessary
+            return AdHocEncoding.utf16leWithBOM;
         }
     }
     else if (start[0] == #00.byte) {
         if (start[1] == #3c.byte && start[2] == #00.byte) {
             if (start[3] == #3f.byte) {
-                // 00 3c 00 3f, UTF-16BE without BOM, or similar
+                // 00 3c 00 3f, L UTF-16BE without BOM, or similar
+                return ParseError("detected 16bit ASCII-encoded <? in big endian order, but UTF-16BE (without BOM) unsupported");
             }
             else if (start[3] == #00.byte) {
-                // 00 3c 00 00, mixed-endian UTF-32 without BOM
+                // 00 3c 00 00, K mixed-endian UTF-32 without BOM
+                return ParseError("detected 32bit ASCII-encoded < in unusual order, but UTF-32 (without BOM) unsupported");
             }
             else {
-                // 00 3c 00 ##, unknown
+                // 00 3c 00 ##, probably UTF-16BE (without BOM), but without charset decl., which is an error
+                return ParseError("probably UTF-16BE (without BOM), but without charset declaration in violation to XML spec. UTF-16BE (without BOM) unsupported anyway.");
             }
         }
         else if (start[1] == #00.byte) {
             if (start[2] == #fe.byte) {
-                // 00 00 fe (ff), UTF-32BE with BOM
+                // 00 00 fe (ff), B UTF-32BE with BOM
+                return ParseError("detected 32bit BOM in big endian order, UTF-32BE (with BOM) unsupported");
             }
             else if (start[2] == #00.byte) {
                 if (start[3] == #3c.byte) {
-                    // 00 00 00 3c, UTF-32BE without BOM
+                    // 00 00 00 3c, H UTF-32BE without BOM
+                    return ParseError("detected 32bit ASCII-encoded < in big endian order, UTF-32BE (without BOM) unsupported");
                 }
                 else {
                     // unknown
+                    return ParseError("probably some 32bit encoding (without BOM), unsupported");
                 }
             }
             else if (start[2] == #3c.byte) {
-                // 00 00 3c (00), mixed-endian UTF-32 without BOM
+                // 00 00 3c (00), J mixed-endian UTF-32 without BOM
+                return ParseError("detected 32bit ASCII-encoded < in unusual order, but UTF-32 (without BOM) unsupported");
             }
             else if (start[2] == #ff.byte) {
-                // 00 00 ff (fe), mixed-endian UTF-32 with BOM
+                // 00 00 ff (fe), A mixed-endian UTF-32 with BOM
+                return ParseError("detected 32bit BOM in unusual order, but UTF-32 (with BOM) unsupported");
             }
             else {
-                // unknown
+                return ParseError("probably some 32bit encoding (without BOM), unsupported");
             }
         }
         else {
             // unknown
+            return ParseError("probably UTF-16BE (without BOM), but without charset declaration in violation to XML spec. UTF-16BE (without BOM) unsupported anyway.");
         }
     }
     else if (start[0] == #ef.byte && start[1] == #bb.byte && start[2] == #bf.byte) {
-        // ef bb bf, UTF-8 with BOM
+        // ef bb bf, G UTF-8 with BOM
+        return AdHocEncoding.utf8WithBOM;
     }
     else if (start[0] == #4c.byte && start[1] == #6f.byte && start[2] == #a7.byte && start[3] == #94.byte) {
-        // 4c 6f a7 94, EBCDIC
+        // 4c 6f a7 94, O EBCDIC
+        return ParseError("detected EBCDIC-encoded XML declaration, but EBCDIC unsupported");
     }
     else {
         // other, UTF-8 without XML decl
+        return AdHocEncoding.other;
     }
 }
 
