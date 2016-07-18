@@ -1,5 +1,6 @@
 import ceylon.buffer.charset {
-    utf8
+    utf8,
+    utf16
 }
 import ceylon.test {
     test,
@@ -9,7 +10,12 @@ import ceylon.test {
 import de.dlkw.madstax {
     XMLEventReader,
     ParseError,
-    PositionPushbackSource
+    PositionPushbackSource,
+    XMLEvent,
+    StartDocument,
+    StartElement,
+    EndElement,
+    EndDocument
 }
 
 test
@@ -44,7 +50,7 @@ test
 shared void readSimple2()
 {
     String xml = " \t<!--abc-->\n <?qwer blablabla{}?> <!--  xycuc --> <element x='&amp;'>kö\n<?a a?>&nana;<!--abc-->&ga; <u jobi:bi:bi=\"gao \" f='&nana;'>ba<![CDATA[text text]]></u></element> <?i i?> <!--end--> ";
-    value xmlBuf = utf8.encodeBuffer(xml).sequence();
+    value xmlBuf = utf16.encodeBuffer(xml).sequence().prepend([#fe.byte, #ff.byte]);
     value r = XMLEventReader(xmlBuf);
     while (!is Finished ev = r.next()) {
         if (is ParseError ev) {
@@ -68,6 +74,206 @@ shared void readSimple3()
         }
         print("l``r.line``/c``r.column``: ``ev``");
     }
+}
+
+test shared void readSimple4()
+{
+    String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone='yes'?> \t<!--abc-->\n  <!--  xycuc --> <element>kö&amp;</element>";
+//    String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"   ?> \t<!--abc-->\n  <!--  xycuc --> <element>kö&amp;</element>";
+    value xmlBuf = utf8.encodeBuffer(xml).sequence();
+    value r = XMLEventReader(xmlBuf);
+    while (!is Finished ev = r.next()) {
+        if (is ParseError ev) {
+            print("l``r.line``/c``r.column``: ``ev.msg``");
+            return;
+        }
+        print("l``r.line``/c``r.column``: ``ev``");
+    }
+}
+
+test shared void encodingUTF8NoBomNoXMLDecl()
+{
+    value xml = "<a/>";
+    value xmlBytes = utf8.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-8");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (!exists enc = ev1.encoding);
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF8WithBomNoXMLDecl()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<a/>";
+    value xmlBytes = utf8.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-8");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (!exists enc = ev1.encoding);
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF8NoBomWithXMLDecl()
+{
+    value xml = "<?xml version='1.0' encoding='UTF-8'?><a/>";
+    value xmlBytes = utf8.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-8");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (exists enc = ev1.encoding, enc == "UTF-8");
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF8WithBomWithXMLDecl()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<?xml version='1.0' encoding='UTF-8'?><a/>";
+    value xmlBytes = utf8.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-8");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (exists enc = ev1.encoding, enc == "UTF-8");
+
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF8WithBomWithXMLDeclNoEncoding()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<?xml version='1.0'?><a/>";
+    value xmlBytes = utf8.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-8");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (!exists enc = ev1.encoding);
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF8WithBomWithXMLDeclWrongEncoding()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<?xml version='1.0' encoding='UTF-16'?><a/>";
+    value xmlBytes = utf8.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-8");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (!exists enc = ev1.encoding);
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF16NoBomNoXMLDecl()
+{
+    value xml = "<a/>";
+    value xmlBytes = utf16.encodeBuffer(xml).sequence();
+    variable Boolean ok = false;
+    try {
+        value reader = XMLEventReader(xmlBytes);
+    }
+    catch (AssertionError e) {
+        ok = true;
+    }
+    assert (ok);
+}
+
+test shared void encodingUTF16_BE_WithBomNoXMLDecl()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<a/>";
+    value xmlBytes = utf16.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-16");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (!exists enc = ev1.encoding);
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF16_LE_WithBomNoXMLDecl()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<a/>";
+    value xmlBytes = [255.byte, 254.byte, 60.byte, 0.byte, 97.byte, 0.byte, 47.byte, 0.byte, 62.byte, 0.byte];
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-16");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (!exists enc = ev1.encoding);
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF16WithBomWithXMLDecl()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<?xml version='1.0' encoding='UTF-16'?><a/>";
+    value xmlBytes = utf16.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-16");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (exists enc = ev1.encoding, enc == "UTF-16");
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF16WithBomWithXMLDeclNoEncoding()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<?xml version='1.0'?><a/>";
+    value xmlBytes = utf16.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-16");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (!exists enc = ev1.encoding);
+    
+    checkCommonEvents(reader);
+}
+
+test shared void encodingUTF16WithBomWithXMLDeclWrongEncoding()
+{
+    value xml = "\{ZERO WIDTH NO-BREAK SPACE}<?xml version='1.0' encoding='UTF-8''?><a/>";
+    value xmlBytes = utf16.encodeBuffer(xml).sequence();
+    value reader = XMLEventReader(xmlBytes);
+    assert (reader.encoding == "UTF-16");
+    
+    value ev1 = reader.next();
+    assert (is StartDocument ev1);
+    assert (!exists enc = ev1.encoding);
+    
+    checkCommonEvents(reader);
+}
+
+void checkCommonEvents(XMLEventReader reader)
+{
+    value ev2 = reader.next();
+    assert (is StartElement ev2);
+    assert (ev2.localName == "a");
+    
+    value ev3 = reader.next();
+    assert (is EndElement ev3);
+    assert (ev3.localName == "a");
+    
+    value ev4 = reader.next();
+    assert (is EndDocument ev4);
+    
+    value ev5 = reader.next();
+    assert (is Finished ev5);
 }
 
 test shared void counter1()

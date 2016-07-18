@@ -25,7 +25,8 @@ shared void suite_01()
 {
     value root01 = parsePath("/home/dlatt/xmlts/xmlconf/xmltest/not-wf/sa").resource;
     assert (is Directory root01);
-    for (path in root01.children("156.xml")) {
+//    for (path in root01.children("156.xml")) {
+    for (path in root01.children()) {
         print(path);
         assert (is File path);
         value contents = path.Reader().readBytes(path.size);

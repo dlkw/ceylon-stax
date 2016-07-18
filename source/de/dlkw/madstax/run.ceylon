@@ -1,5 +1,7 @@
 import ceylon.buffer.charset {
-    utf8
+    utf8,
+    Charset,
+    utf16
 }
 import ceylon.collection {
     LinkedList,
@@ -60,11 +62,105 @@ class ElementInfo(name)
     shared String name;
 }
 
+class ChainingIterator<Element>({Iterator<Element>*} iterators)
+    satisfies Iterator<Element>
+{
+    value iterIter = iterators.iterator();
+    variable Iterator<Element>|Finished current = iterIter.next();
+    shared actual Element|Finished next()
+    {
+        if (!is Finished cr = current) {
+            if (!is Finished it = cr.next()) {
+                return it;
+            }
+            while (!is Finished ii = iterIter.next()) {
+                if (!is Finished it = ii.next()) {
+                    current = ii;
+                    return it;
+                }
+            }
+            current = finished;
+            return finished;
+        }
+        else {
+            return finished;
+        }
+    }
+    
+    
+}
+
 "for now, take an array. Really should be some generic reader."
-shared class XMLEventReader({Byte*} arr)
+shared class XMLEventReader({Byte*} arr, Charset? forcedEncoding = null)
         satisfies Iterator<XMLEvent|ParseError>
 {
-    value source = PositionPushbackSource(utf8.decode(arr).iterator());
+    
+    [Charset, Iterator<Byte>] guessCharset(Iterator<Byte> headIterator)
+    {
+        value b0 = headIterator.next();
+        if (is Finished b0) {
+            throw AssertionError("input too short to be an XML document");
+        }
+        value b1 = headIterator.next();
+        if (is Finished b1) {
+            throw AssertionError("input too short to be an XML document");
+        }
+        value b2 = headIterator.next();
+        if (is Finished b2) {
+            throw AssertionError("input too short to be an XML document");
+        }
+        value b3 = headIterator.next();
+        if (is Finished b3) {
+            throw AssertionError("input too short to be an XML document");
+        }
+        Byte[4] head = [b0, b1, b2, b3];
+
+        AdHocEncoding | ParseError guessedEncoding = guessEncoding(head);
+        if (!is AdHocEncoding guessedEncoding) {
+            throw AssertionError(guessedEncoding.msg);
+        }
+
+        Charset charset;
+        Iterator<Byte> newInput;
+        switch (guessedEncoding)
+        case (AdHocEncoding.utf8WithoutBOM) {
+            charset = utf8;
+            newInput = ChainingIterator({head.iterator(), headIterator});
+        }
+        case (AdHocEncoding.utf8WithBOM) {
+            charset = utf8;
+            newInput = headIterator;
+        }
+        case (AdHocEncoding.other) {
+            charset = utf8;
+            newInput = ChainingIterator({head.iterator(), headIterator});
+        }
+        case (AdHocEncoding.utf16beWithBOM) {
+            charset = utf16;
+            newInput = ChainingIterator({head.iterator(), headIterator});
+        }
+        case (AdHocEncoding.utf16leWithBOM) {
+            charset = utf16;
+            newInput = ChainingIterator({head.iterator(), headIterator});
+        }
+        
+        return [charset, newInput];
+    }
+    
+    Charset charset;
+    Iterator<Byte> newIterator;
+    if (exists forcedEncoding) {
+        charset = forcedEncoding;
+        newIterator = arr.iterator();
+    }
+    else {
+        value guessResult = guessCharset(arr.iterator());
+        charset = guessResult[0];
+        newIterator = guessResult[1];
+    }
+    shared String encoding = charset.name;
+
+    value source = PositionPushbackSource(charset.decode(arr).iterator());
     
     shared Integer offset => source.offset;
     shared Integer line => source.line;
@@ -79,11 +175,9 @@ shared class XMLEventReader({Byte*} arr)
     variable State state = State.beforeProlog;
     
     Queue<XMLEvent> parsedEvents = LinkedList<XMLEvent>();
-    
-    StringBuilder sb1 = StringBuilder();
-    
+
     Stack<ElementInfo> elementPath = LinkedList<ElementInfo>();
-    
+
     Character|Finished nextChar()
     {
         while (exists s = entityRefSource.top) {
@@ -107,7 +201,7 @@ shared class XMLEventReader({Byte*} arr)
             source.pushbackChar(character);
         }
     }
-    
+
     shared actual XMLEvent|ParseError|Finished next()
     {
         if (exists event = parsedEvents.accept()) {
@@ -122,7 +216,7 @@ shared class XMLEventReader({Byte*} arr)
                     if (isXmlWhitespace(c0)) {
                         source.pushbackChar(c0);
                         state = State.noXmlDecl;
-                        return StartDocument(defaultXmlVersion, defaultXmlEncoding, false);
+                        return StartDocument.absent;
                     }
                     else {
                         c1 = c0;
@@ -132,7 +226,7 @@ shared class XMLEventReader({Byte*} arr)
                         state = State.prologLt;
                     }
                     else {
-                        return ParseError("text content before root element");
+                        return ParseError("text content before root element or wrong encoding (detected ``charset``)");
                     }
                 }
                 else {
@@ -143,7 +237,7 @@ shared class XMLEventReader({Byte*} arr)
                 if (!is Finished c = source.nextChar()) {
                     if (c == '!') {
                         state = State.prologExclam;
-                        return StartDocument(defaultXmlVersion, defaultXmlEncoding, false);
+                        return StartDocument.absent;
                     }
                     else if (c == '?') {
                         state = State.prologQuest;
@@ -151,7 +245,7 @@ shared class XMLEventReader({Byte*} arr)
                     else if (isNameStartChar(c)) {
                         source.pushbackChar(c);
                         state = State.rootEl;
-                        return StartDocument(defaultXmlVersion, defaultXmlEncoding, false);
+                        return StartDocument.absent;
                     }
                     else {
                         return ParseError("invalid name start character");
@@ -230,6 +324,37 @@ shared class XMLEventReader({Byte*} arr)
                 }
                 else {
                     return ParseError("EOF while reading comment/doctype in prolog");
+                }
+            }
+            case (State.prologQuest) {
+                switch (it = checkWithPushbackOnFalse("xml"))
+                case (finished) {
+                    return ParseError("EOF in XML declaration");
+                }
+                case (false) {
+                    state = State.prologPI;
+                }
+                case (true) {
+                    value res = gatherWhitespace();
+                    value c = res[1];
+                    if (is Finished c) {
+                        return ParseError("EOF in XML declaration");
+                    }
+                    if (res[0].empty) {
+                        pushbackChar(c);
+                        pushbackChar('l');
+                        pushbackChar('m');
+                        pushbackChar('x');
+                    }
+                    else {
+                        pushbackChar(c);
+                        value startDocument = readXmlDeclaration();
+                        if (is ParseError startDocument) {
+                            return startDocument;
+                        }
+                        state = State.noXmlDecl;
+                        return startDocument;
+                    }
                 }
             }
             case (State.prologPI) {
@@ -516,6 +641,22 @@ shared class XMLEventReader({Byte*} arr)
         return true;
     }
     
+    Boolean|Finished checkWithPushbackOnFalse(String rest) {
+        value sb = StringBuilder();
+        for (sc in rest) {
+            if (!is Finished c = nextChar()) {
+                if (c != sc) {
+                    sb.reversed.each((pb)=>pushbackChar(pb));
+                    return false;
+                }
+            }
+            else {
+                return finished;
+            }
+        }
+        return true;
+    }
+    
     [String, Character|Finished] gatherWhitespace(Character? first = null)
     {
         StringBuilder sb = StringBuilder();
@@ -536,6 +677,27 @@ shared class XMLEventReader({Byte*} arr)
             }
             else {
                 return [sb.string, c];
+            }
+        }
+    }
+    
+    [String, Character]|ParseError gatherVersionDecimal() {
+        value sb = StringBuilder();
+        while (true) {
+            value c = nextChar();
+            if (is Finished c) {
+                return ParseError("EOF in XML version number");
+            }
+            if ('0' <= c <= '9') {
+                sb.appendCharacter(c);
+            }
+            else {
+                if (sb.empty) {
+                    return ParseError("non-digit in XML version number decimal place");
+                }
+                else {
+                    return [sb.string, c];
+                }
             }
         }
     }
@@ -726,6 +888,173 @@ shared class XMLEventReader({Byte*} arr)
         }
     }
     
+    StartDocument|ParseError readXmlDeclaration()
+    {
+        value versionName = check("version");
+        switch (versionName)
+        case (finished) {
+            return ParseError("EOF in XML declaration");
+        }
+        case (false) {
+            return ParseError("version must be specified in XML declaration");
+        }
+        case (true) {
+            if (is ParseError err = checkAttrEq()) {
+                return err;
+            }
+        }
+        value ws = nextChar();
+        if (is Finished ws) {
+            return ParseError("EOF in XML declaration");
+        }
+        Character qExpected;
+        if (isXmlWhitespace(ws)) {
+            value wsResult1 = gatherWhitespace(ws);
+            if (!is Finished it1 = wsResult1[1]) {
+                qExpected = it1;
+            }
+            else {
+                return ParseError("EOF after attribute name");
+            }
+        }
+        else {
+            qExpected = ws;
+        }
+        if (qExpected != '"' && qExpected != '\'') {
+            return ParseError("invalid attribute value delimiter in XML declaration");
+        }
+        
+        value ck = check("1.");
+        String version;
+        switch (ck)
+        case (finished) {
+            return ParseError("EOF in XML version");
+        }
+        case (false) {
+            return ParseError("XML version must begin with \"1.\"");
+        }
+        case (true) {
+            value versionDecimal = gatherVersionDecimal();
+            if (is ParseError versionDecimal) {
+                return versionDecimal;
+            }
+            if (versionDecimal[1] != qExpected) {
+                return ParseError("non-decimal in XML version decimal place");
+            }
+            version = "1." + versionDecimal[0];
+        }
+        
+        
+        
+        
+        
+        value [ws2, c] = gatherWhitespace();
+        if (is Finished c) {
+            return ParseError("EOF in XML declaration");
+        }
+        
+        Character cnext;
+        String? encoding;
+        if (c == 'e') {
+            value enc = check("ncoding");
+            
+            value eqRes = checkAttrEq();
+            if (is ParseError eqRes) {
+                return eqRes;
+            }
+            
+            value ws3 = nextChar();
+            if (is Finished ws3) {
+                return ParseError("EOF in XML declaration");
+            }
+            Character qExpected2;
+            if (isXmlWhitespace(ws3)) {
+                value wsResult1 = gatherWhitespace(ws3);
+                if (!is Finished it1 = wsResult1[1]) {
+                    qExpected2 = it1;
+                }
+                else {
+                    return ParseError("EOF after attribute name");
+                }
+            }
+            else {
+                qExpected2 = ws3;
+            }
+            value encValue = readXmlDeclEncodingValue(qExpected2);
+            if (is ParseError encValue) {
+                return encValue;
+            }
+            encoding = encValue;
+
+            value [ws4, c2] = gatherWhitespace();
+            if (is Finished c2) {
+                return ParseError("EOF in XML declaration");
+            }
+            cnext = c2;
+        }
+        else {
+            encoding = null;
+            cnext = c;
+        }
+        
+        Character cnext2;
+        Boolean? standalone;
+        if (cnext == 's') {
+            value std = check("tandalone");
+
+            value eqRes = checkAttrEq();
+            if (is ParseError eqRes) {
+                return eqRes;
+            }
+            
+            value ws3 = nextChar();
+            if (is Finished ws3) {
+                return ParseError("EOF in XML declaration");
+            }
+            Character qExpected2;
+            if (isXmlWhitespace(ws3)) {
+                value wsResult1 = gatherWhitespace(ws3);
+                if (!is Finished it1 = wsResult1[1]) {
+                    qExpected2 = it1;
+                }
+                else {
+                    return ParseError("EOF after attribute name");
+                }
+            }
+            else {
+                qExpected2 = ws3;
+            }
+            value staValue = readYesNoValue(qExpected2);
+            if (is ParseError staValue) {
+                return staValue;
+            }
+            standalone = staValue;
+            
+            value [ws4, c2] = gatherWhitespace();
+            if (is Finished c2) {
+                return ParseError("EOF in XML declaration");
+            }
+            cnext2 = c2;
+        }
+        else {
+            standalone = null;
+            cnext2 = cnext;
+        }
+
+        if (cnext2 != '?') {
+            return ParseError("invalid attr in XML declaration");
+        }
+        value c3 = nextChar();
+        if (is Finished c3) {
+            return ParseError("EOF in XML declaration");
+        }
+        if (c3 != '>') {
+            return ParseError("invalid XML declaration");
+        }
+
+        return StartDocument.present(version, encoding, standalone);
+    }
+    
     [String, String]|ParseError readProcessingInstruction()
     {
         if (!is Finished c = nextChar()) {
@@ -820,23 +1149,11 @@ shared class XMLEventReader({Byte*} arr)
             return nameResult;
         }
         value attributeName = nameResult[0];
-        Character eqExpected;
-        if (isXmlWhitespace(nameResult[1])) {
-            value wsResult1 = gatherWhitespace(nameResult[1]);
-            if (!is Finished it1 = wsResult1[1]) {
-                eqExpected = it1;
-            }
-            else {
-                return ParseError("EOF after attribute name");
-            }
+        
+        if (is ParseError eq = checkAttrEq(nameResult[1])) {
+            return eq;
         }
-        else {
-            eqExpected = nameResult[1];
-        }
-
-        if (eqExpected != '=') {
-            return ParseError("missing = sign after attribute name");
-        }
+        
         value wsResult2 = gatherWhitespace();
         if (!is Finished it2 = wsResult2[1]) {
             value attributeValue = readAttributeValue(it2);
@@ -852,10 +1169,43 @@ shared class XMLEventReader({Byte*} arr)
         }
     }
     
+    ParseError? checkAttrEq(Character? first = null)
+    {
+        Character c;
+        if (exists first) {
+            c = first;
+        }
+        else {
+            value cc = nextChar();
+            if (is Finished cc) {
+                return ParseError("EOF after attribute name");
+            }
+            c = cc;
+        }
+        Character eqExpected;
+        if (isXmlWhitespace(c)) {
+            value wsResult1 = gatherWhitespace(c);
+            if (!is Finished it1 = wsResult1[1]) {
+                eqExpected = it1;
+            }
+            else {
+                return ParseError("EOF after attribute name");
+            }
+        }
+        else {
+            eqExpected = c;
+        }
+        
+        if (eqExpected != '=') {
+            return ParseError("missing = sign after attribute name");
+        }
+        return null;
+    }
+    
     String|ParseError readAttributeValue(Character first)
     {
         if (first != '\'' && first != '"') {
-            return ParseError("invalid attribute value deliminter");
+            return ParseError("invalid attribute value delimiter");
         }
         value sb = StringBuilder();
         while (true) {
@@ -871,6 +1221,77 @@ shared class XMLEventReader({Byte*} arr)
                 return ParseError("invalid character in attribute value");
             }
             sb.appendCharacter(c);
+        }
+    }
+    
+    String|ParseError readXmlDeclEncodingValue(Character first)
+    {
+        if (first != '\'' && first != '"') {
+            return ParseError("invalid attribute value delimiter");
+        }
+        value sb = StringBuilder();
+
+        // first character
+        value c0 = nextChar();
+        if (is Finished c0) {
+            return ParseError("EOF in attribute value");
+        }
+        if (c0 == first) {
+            return sb.string;
+        }
+        if ('a' <= c0 <= 'z' || 'A' <= c0 <= 'Z') {
+            sb.appendCharacter(c0);
+        }
+        else {
+            return ParseError("invalid character in attribute value");
+        }
+
+        while (true) {
+            value c = nextChar();
+            if (is Finished c) {
+                return ParseError("EOF in attribute value");
+            }
+            if (c == first) {
+                return sb.string;
+            }
+            if ('a' <= c <= 'z' || 'A' <= c <= 'Z' || '0' <= c <= '9' || c == '-' || c == '_' || c == '.') {
+                sb.appendCharacter(c);
+            }
+            else {
+                return ParseError("invalid character in encoding attribute value");
+            }
+        }
+    }
+    
+    Boolean|ParseError readYesNoValue(Character first)
+    {
+        if (first != '\'' && first != '"') {
+            return ParseError("invalid attribute value delimiter");
+        }
+        value sb = StringBuilder();
+        
+        while (true) {
+            value c = nextChar();
+            if (is Finished c) {
+                return ParseError("EOF in attribute value");
+            }
+            if (c == first) {
+                if (sb.string == "yes") {
+                    return true;
+                }
+                else if (sb.string == "no") {
+                    return false;
+                }
+                else {
+                    return ParseError("standalone value must be yes or no");
+                }
+            }
+            if (c in "yesno") {
+                sb.appendCharacter(c);
+            }
+            else {
+                return ParseError("standalone value must be yes or no");
+            }
         }
     }
 }
@@ -974,11 +1395,13 @@ class AdHocEncoding
         | utf16leWithBOM
         | other
 {
-    shared new utf8WithoutBOM{}
-    shared new utf8WithBOM{}
-    shared new utf16beWithBOM{}
-    shared new utf16leWithBOM{}
-    shared new other{}
+    String s;
+    shared new utf8WithoutBOM{s="UTF-8 without BOM";}
+    shared new utf8WithBOM{s="UTF-8 with BOM";}
+    shared new utf16beWithBOM{s="UTF-16BE with BOM";}
+    shared new utf16leWithBOM{s="UTF-16LE with BOM";}
+    shared new other{s="UTF-8 without BOM, no XML declaration";}
+    shared actual String string => s;
 }
 
 /*
@@ -1006,7 +1429,7 @@ AdHocEncoding|ParseError guessEncoding(Byte[4] start)
 {
     if (start[0] == #3c.byte) {
         if (start[1] == #3f.byte) {
-            // 3c 3f, N UTF-8 without BOM, charset decl unnecessary
+            // 3c 3f, N UTF-8 without BOM, charset decl unnecessary, but may be any ASCII-valued 8bit encoding
             return AdHocEncoding.utf8WithoutBOM;
         }
         else if (start[1] == #00.byte) {
@@ -1019,12 +1442,12 @@ AdHocEncoding|ParseError guessEncoding(Byte[4] start)
                 return ParseError("detected 32bit ASCII-encoded < in little endian order, but UTF-32LE (without BOM) unsupported");
             }
             else {
-                // unknown
+                // unknown, using UTF-8, no charset decl found, only UTF-8 allowed.
                 return AdHocEncoding.other;
             }
         }
         else {
-            // unknown
+            // unknown, using UTF-8, no charset decl found, only UTF-8 allowed.
             return AdHocEncoding.other;
         }
     }
@@ -1044,7 +1467,7 @@ AdHocEncoding|ParseError guessEncoding(Byte[4] start)
             return ParseError("detected 32bit BOM in little endian order, UTF-32LE (with BOM) unsupported");
         }
         else {
-            // ff fe ## ##, F UTF-16LE with BOM, charset decl unnecessary
+            // ff fe ## ##, F UTF-16LE with BOM, charset decl unnecessary, but UTF-16 or UTF-16BE accepted
             return AdHocEncoding.utf16leWithBOM;
         }
     }
@@ -1096,7 +1519,7 @@ AdHocEncoding|ParseError guessEncoding(Byte[4] start)
         }
     }
     else if (start[0] == #ef.byte && start[1] == #bb.byte && start[2] == #bf.byte) {
-        // ef bb bf, G UTF-8 with BOM
+        // ef bb bf, G UTF-8 with BOM, charset decl unnecessary, but UTF-8 accepted
         return AdHocEncoding.utf8WithBOM;
     }
     else if (start[0] == #4c.byte && start[1] == #6f.byte && start[2] == #a7.byte && start[3] == #94.byte) {
@@ -1104,7 +1527,7 @@ AdHocEncoding|ParseError guessEncoding(Byte[4] start)
         return ParseError("detected EBCDIC-encoded XML declaration, but EBCDIC unsupported");
     }
     else {
-        // other, UTF-8 without XML decl
+        // unknown, using UTF-8, no charset decl found, only UTF-8 allowed.
         return AdHocEncoding.other;
     }
 }
@@ -1115,10 +1538,54 @@ shared abstract class XMLEvent()
     
 }
 
-shared class StartDocument(shared String version, shared String encoding, Boolean xmlDeclPresent)
-        extends XMLEvent()
+shared class StartDocument
+        extends XMLEvent
 {
-    shared actual String string => "Start document XML ``version`` encoding ``encoding``";
+    shared Boolean xmlDeclPresent;
+    shared String version;
+    shared String? encoding;
+    shared Boolean? standalone;
+    
+    shared new present(String version, String? encoding, Boolean? standalone)
+        extends XMLEvent()
+    {
+        xmlDeclPresent = true;
+        this.version = version;
+        this.encoding = encoding;
+        this.standalone = standalone;
+    }
+    
+    shared new absent extends XMLEvent()
+    {
+        xmlDeclPresent = false;
+        this.version = "1.0";
+        this.encoding = null;
+        this.standalone = null;
+    }
+    
+    shared actual String string
+    {
+        value sb = StringBuilder();
+        sb.append("Start document XML ").append(version);
+        if (xmlDeclPresent) {
+             if (exists encoding) {
+                 sb.append(" encoding ").append(encoding);
+             }
+             else {
+                 sb.append(" (no encoding specified)");
+             }
+             if (exists standalone) {
+                 sb.append(" standalone: ").append(standalone.string);
+             }
+             else {
+                 sb.append(" (no standalone flag)");
+             }
+        }
+        else {
+            sb.append(" (no XML declaration present)");
+        }
+        return sb.string;
+    }
 }
 
 shared class StartElement(shared String localName, Boolean emptyElementTag = false, {Attribute*} attributes = empty)
