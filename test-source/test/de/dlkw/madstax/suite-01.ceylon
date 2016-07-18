@@ -30,7 +30,7 @@ shared void suite_01()
         print(path);
         assert (is File path);
         value contents = path.Reader().readBytes(path.size);
-        value r = XMLEventReader(contents);
+        value r = XMLEventReader(false, contents);
         MutableList<XMLEvent> events = ArrayList<XMLEvent>();
         while (true) {
             try {

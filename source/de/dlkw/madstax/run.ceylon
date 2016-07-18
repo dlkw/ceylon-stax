@@ -9,7 +9,10 @@ import ceylon.collection {
     Stack,
     ArrayList,
     HashMap,
-    MutableMap
+    MutableMap,
+    ListMutator,
+    MapMutator,
+    MutableList
 }
 shared class ParseError(shared String msg){}
 
@@ -91,9 +94,10 @@ class ChainingIterator<Element>({Iterator<Element>*} iterators)
 }
 
 "for now, take an array. Really should be some generic reader."
-shared class XMLEventReader({Byte*} arr, Charset? forcedEncoding = null)
+shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding = null)
         satisfies Iterator<XMLEvent|ParseError>
 {
+    shared Boolean namespaceAware;
     
     [Charset, Iterator<Byte>] guessCharset(Iterator<Byte> headIterator)
     {
@@ -398,14 +402,29 @@ shared class XMLEventReader({Byte*} arr, Charset? forcedEncoding = null)
                         else {
                             state = State.content;
                         }
-                        parsedEvents.offer(EndElement(nameResult[0], true));
-                        return StartElement(nameResult[0], true, rr[0].map((attrib) => Attribute(attrib.key, attrib.item)));
+                        
+                        if (namespaceAware) {
+                            value nsBindingDeclsAndAttribs = determineNsBindingDeclsAndAttribs(rr[0]);
+                            parsedEvents.offer(EndElement(nameResult[0], true));
+                            return StartElement(nameResult[0], null, null, true, nsBindingDeclsAndAttribs[1], nsBindingDeclsAndAttribs[0]);
+                        }
+                        else {
+                            parsedEvents.offer(EndElement(nameResult[0], true));
+                            return StartElement(nameResult[0], null, null, true, rr[0].map((attrib) => Attribute(attrib.key, attrib.item)));
+                        }
                     }
                 }
                 else if (c1 == '>') {
                     state = State.content;
-                    elementPath.push(ElementInfo(nameResult[0]));
-                    return StartElement(nameResult[0], false, rr[0].map((attrib) => Attribute(attrib.key, attrib.item)));
+                    if (namespaceAware) {
+                        value nsBindingDeclsAndAttribs = determineNsBindingDeclsAndAttribs(rr[0]);
+                        elementPath.push(ElementInfo(nameResult[0]));
+                        return StartElement(nameResult[0], null, null, false, nsBindingDeclsAndAttribs[1], nsBindingDeclsAndAttribs[0]);
+                    }
+                    else {
+                        elementPath.push(ElementInfo(nameResult[0]));
+                        return StartElement(nameResult[0], null, null, false, rr[0].map((attrib) => Attribute(attrib.key, attrib.item)));
+                    }
                 }
                 else {
                     return ParseError("invalid character in start element tag");
@@ -1387,6 +1406,91 @@ Boolean isNameChar(Character c)
     return false;
 }
 
+shared String namespace_xml = "http://www.w3.org/XML/1998/namespace";
+shared String namespace_xmlns = "http://www.w3.org/2000/xmlns/";
+
+[Map<String, String>, List<Attribute>] determineNsBindingDeclsAndAttribs(Map<String, String> attribsKeyValue)
+{
+    [MutableMap<String, String>, MutableList<Attribute>] res = [HashMap<String, String>(), ArrayList<Attribute>()];
+    attribsKeyValue.each((entry)
+    {
+        Null|ParseError bind(MapMutator<String, String> decls, String key, String item)
+        {
+            if (key.any((c)=>c == ':')) {
+                return ParseError("prefix may not contain a colon (:)");
+            }
+            if (item == namespace_xml && key != "xml") {
+                return ParseError("namespace ``namespace_xml`` may be bound to prefix xml only");
+            }
+            else if (item == namespace_xmlns) {
+                return ParseError("namespace ``namespace_xmlns`` may not be bound to any prefix");
+            }
+            decls.put(key, item);
+            return null;
+        }
+        
+       if (entry.key.startsWith("xmlns")) {
+            if (!entry.key.longerThan(5)) {
+                if (is ParseError it = bind(res[0], "", entry.item)) {
+                    return it;
+                }
+            }
+            else {
+                if (exists colon = entry.key[5], colon == ':') {
+                    value prefix = entry.key.spanFrom(6);
+                    if (prefix.empty) {
+                        return ParseError("namespace prefix to define missing");
+                    }
+                    else {
+                        if (exists it = res[0].get(prefix)) {
+                            return ParseError("namespace prefix defined twice in element");
+                        }
+                        if (prefix.startsWith("xml")) {
+                            if (!prefix.longerThan(3)) {
+                                if (entry.item != namespace_xml) {
+                                    return ParseError("prefix xml may be bound to ``namespace_xml`` only");
+                                }
+                                else {
+                                    if (is ParseError it = bind(res[0], prefix, entry.item)) {
+                                        return it;
+                                    }
+                                }
+                            }
+                            else {
+                                if (prefix.equals("xmlns")) {
+                                    return ParseError("prefix xmlns may not be declared");
+                                }
+                            }
+                        }
+                        else {
+                            if (is ParseError it = bind(res[0], prefix, entry.item)) {
+                                return it;
+                            }
+                        }
+                    }
+                }
+                else {
+                    // attribute starting with xmnls#, where # is a Character, but not a colon
+                    // TODO attribute namespace prefix stuff
+                    if (entry.key.any((c)=>c == ':')) {
+                        return ParseError("attribute name may not contain colon (:)");
+                    }
+                    res[1].add(Attribute(entry.key, entry.item));
+                }
+            }
+       }
+       else {
+           // TODO attribute namespace prefix stuff
+           if (entry.key.any((c)=>c == ':')) {
+               return ParseError("attribute name may not contain colon (:)");
+           }
+           res[1].add(Attribute(entry.key, entry.item));
+       }
+       return res;
+    });
+    return res;
+}
+
 
 class AdHocEncoding
         of utf8WithoutBOM
@@ -1588,13 +1692,27 @@ shared class StartDocument
     }
 }
 
-shared class StartElement(shared String localName, Boolean emptyElementTag = false, {Attribute*} attributes = empty)
+shared class StartElement(localName, prefix = null, namespaceName = null, Boolean emptyElementTag = false, attributes = empty, namespaceDeclarations = emptyMap)
         extends XMLEvent()
 {
+    shared String localName;
+    shared String? prefix;
+    shared String? namespaceName;
+    shared {Attribute*} attributes;
+    shared Map<String, String> namespaceDeclarations;
+    
     shared actual String string
     {
         value sb = StringBuilder();
-        sb.append("Start element \"``localName``\"");
+        sb.append("Start element \"");
+        if (exists prefix) {
+            sb.append(prefix).appendCharacter(':');
+        }
+        sb.append(localName);
+        if (exists namespaceName) {
+            sb.appendCharacter('{').append(namespaceName).appendCharacter('}');
+        }
+        sb.appendCharacter('"');
         for (a in attributes) {
             sb.appendCharacter('\n').append(a.string);
         }
