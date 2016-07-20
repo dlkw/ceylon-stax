@@ -16,31 +16,32 @@ It defines an Iterator-based API for applications to fetch events similar to StA
 This might illustrate the usage a bit:
 ```ceylon
 
-shared void test2()
+shared void dummyUsage()
 {
     String xml = "<!-- a test --><ns0:test attr='val' xmlns:ns0='http://madstax.dlkw.de'>some text</ns0:test>";
     value xmlBuf = utf8.encodeBuffer(xml).sequence();
-    value r = XMLEventReader(true, xmlBuf);
-    while (!is Finished x = r.next()) {
-        if (is ParseError x) {
-            print(x.msg);
+    
+    value reader = XMLEventReader(true, xmlBuf);
+    while (!is Finished event = reader.next()) {
+        if (is ParseError event) {
+            print(event.msg);
             break;
         }
         
-        print(x);
+        print(event);
 
-        switch (x)
+        switch (event)
         case (is StartElement) {
-            print("using defined attributes: ``x.attributes``");
+            print("using defined attributes: ``event.attributes``");
         }
         case (is Characters) {
-            print("using text content: ``x.text``");
+            print("using text content: ``event.text``");
         }
         case (is Comment) {
-            print("using comment: ``x.comment``");
+            print("using comment: ``event.comment``");
         }
         else {
-            // ignore all others
+            // ignore all other events
         }
     }
 }
