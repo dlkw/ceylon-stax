@@ -19,12 +19,9 @@ Map<String, String> predefinedEntities = map({
         "nana"->"a&amp;uu&lt;zz"
 });
 
-String|ParseError normalizeAttributeValue(String unnormalized, Boolean cdata)
+String normalizeAttributeValue(String unnormalized, Boolean cdata)
 {
     value replaced = replaceReference(unnormalized);
-    if (is ParseError replaced) {
-        return replaced;
-    }
     
     if (cdata) {
         return replaced;
@@ -58,7 +55,7 @@ String trimAndCollateWhitespace(String input)
     return builder.string;
 }
 
-String|ParseError gatherReference(Character|Finished nextChar(), Character? first = null)
+String gatherReference(Character|Finished nextChar(), Character? first = null)
 {
     StringBuilder sb = StringBuilder();
     if (exists first) {
@@ -76,32 +73,26 @@ String|ParseError gatherReference(Character|Finished nextChar(), Character? firs
                 sb.appendCharacter(c);
             }
             else {
-                return ParseError("invalid character in reference");
+                throw ParseException("invalid character in reference");
             }
         }
         else {
-            return ParseError("EOF in reference");
+            throw ParseException("EOF in reference");
         }
     }
 }
 
-Character|ParseError resolveCharacterReference(Character|Finished nextChar())
+Character resolveCharacterReference(Character|Finished nextChar())
 {
     if (!is Finished c0 = nextChar()) {
         Integer? code;
         if (c0 == 'x') {
             value reference = gatherReference(nextChar);
-            if (is ParseError reference) {
-                return reference;
-            }
             
             code = parseInteger(reference, 16);
         }
         else {
             value reference = gatherReference(nextChar, c0);
-            if (is ParseError reference) {
-                return reference;
-            }
             
             code = parseInteger(reference);
         }
@@ -109,20 +100,20 @@ Character|ParseError resolveCharacterReference(Character|Finished nextChar())
         if (exists code) {
             value char = code.character;
             if (!isChar(char)) {
-                return ParseError("character reference for invalid character");
+                throw ParseException("character reference for invalid character");
             }
             return code.character;
         }
         else {
-            return ParseError("invalid character reference");
+            throw ParseException("invalid character reference");
         }
     }
     else {
-        return ParseError("EOF in character reference");
+        throw ParseException("EOF in character reference");
     }
 }
 
-String|ParseError replaceReference(String input)
+String replaceReference(String input)
 {
     value iterator = input.iterator();
 
@@ -152,37 +143,28 @@ String|ParseError replaceReference(String input)
             if (!is Finished c = iterator.next()) {
                 if (c == '#') {
                     value cr = resolveCharacterReference(iterator.next);
-                    if (is ParseError cr) {
-                        return cr;
-                    }
                     builder.appendCharacter(cr);
                     state = NState.simple;
                 }
                 else {
                     value reference = gatherReference(iterator.next, c);
-                    if (is ParseError reference) {
-                        return reference;
-                    }
                     
                     value replacement = predefinedEntities[reference];
                     if (exists replacement) {
                         if (replacement.any((c) => c == '<')) {
-                            return ParseError("illegale tag start in attribute value");
+                            throw ParseException("illegale tag start in attribute value");
                         }
                         value rep = replaceReference(replacement);
-                        if (is ParseError rep) {
-                            return rep;
-                        }
                         builder.append(rep);
                         state = NState.simple;
                     }
                     else {
-                        return ParseError("undefined entity ``reference``");
+                        throw ParseException("undefined entity ``reference``");
                     }
                 }
             }
             else {
-                return ParseError("EOF in reference");
+                throw ParseException("EOF in reference");
             }
         }
     }

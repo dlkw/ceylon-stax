@@ -91,6 +91,8 @@ test shared void readSimple4()
     }
 }
 
+
+
 test shared void encodingUTF8NoBomNoXMLDecl()
 {
     value xml = "<a/>";
@@ -267,7 +269,7 @@ void checkCommonEvents(XMLEventReader reader)
     
     value ev3 = reader.next();
     assert (is EndElement ev3);
-    assert (ev3.localName == "a");
+    assert (ev3.name.localName == "a");
     
     value ev4 = reader.next();
     assert (is EndDocument ev4);
@@ -470,3 +472,5 @@ test shared void counter5()
     
     assertEquals(src.nextChar(), finished);
 }
+
+
