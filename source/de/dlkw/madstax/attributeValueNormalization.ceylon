@@ -14,9 +14,7 @@ Map<String, String> predefinedEntities = map({
         "lt"   -> "&#60;",
         "gt"   -> ">",
         "apos" -> "'",
-        "quot" -> "\"",
-        "ga"-> "aha<joi>mama</joi> ",
-        "nana"->"a&amp;uu&lt;zz"
+        "quot" -> "\""
 });
 
 String normalizeAttributeValue(String unnormalized, Boolean cdata)
