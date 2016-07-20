@@ -13,6 +13,8 @@ import ceylon.collection {
     MapMutator,
     MutableList
 }
+
+"Error returned to signal a parsing error."
 shared class ParseError(shared String msg){}
 class ParseException(shared String msg) extends Exception(msg){}
 
@@ -60,7 +62,7 @@ class State of beforeProlog
 shared String defaultXmlVersion = "1.0";
 shared String defaultXmlEncoding = "UTF-8";
 
-shared class QName(localName, namespaceName=null, prefix=null)
+shared class ExpandedName(localName, namespaceName=null, prefix=null)
 {
     shared String localName;
     shared String? namespaceName;
@@ -68,7 +70,7 @@ shared class QName(localName, namespaceName=null, prefix=null)
     
     shared actual Boolean equals(Object that)
     {
-        if (!is QName that) {
+        if (!is ExpandedName that) {
             return false;
         }
         
@@ -105,16 +107,40 @@ shared class QName(localName, namespaceName=null, prefix=null)
 
 class ElementInfo(name, namespaceDeclarations)
 {
-    shared QName name;
+    shared ExpandedName name;
     shared Map<String, String>? namespaceDeclarations;
 }
 
-"for now, take an array. Really should be some generic reader."
+"""
+   Pull-parser for reading XML, offering XMLEvents to the calling application.
+ 
+   This is a(n incomplete) non-validating XML processor according to the W3C's [Extensible Markup Language (XML) 1.0 (Fifth Edition)]
+   (http://www.w3.org/TR/2008/REC-xml-20081126/). The major restriction is the missing support for DOCTYPE, so
+   entities (other than the document entity) cannot be declared.
+ 
+   The parser is optionally namespace-aware, supporting the W3C's [Namespaces in XML 1.0 (Third Edition)](http://www.w3.org/TR/2009/REC-xml-names-20091208/).
+ 
+   During initialization with an input Sequential<Byte>, the XMLEventReader tries to heuristically detect the input's character encoding. This detection
+   uses the encoding="..." pseudo-attribute of the XML declaration at the beginning of the document, if present. It
+   can be overridden using the forcedEncoding parameter, which is useful if some external protocol (like MIME) specifies the encoding of the XML document.
+   The encoding that the XMLEventReader uses can be queried via the `encoding` property.
+   
+   After initialization, the `XMLEvent`s can be retrieved via the `Iterator` mechanism, which may return a `ParseError` in case of well-formedness error.
+"""
+by("Dirk Lattermann")
 throws(`class ParseException`)
-shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding = null)
+shared class XMLEventReader(namespaceAware, input, forcedEncoding = null)
         satisfies Iterator<XMLEvent|ParseError>
 {
+    "Controls if the parser shall be namespace aware."
     shared Boolean namespaceAware;
+    
+    "The bytes that will be parsed into XMLEvents."
+    {Byte*} input;
+    
+    "If non-null, the encoding that will be used to convert the [[input]] bytes to characters.
+     If null, the encoding will be auto-detected from the input."
+    Charset? forcedEncoding;
     
     throws(`class ParseException`)
     [Charset, Iterator<Byte>] guessCharset(Iterator<Byte> headIterator)
@@ -170,19 +196,26 @@ shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding
     Iterator<Byte> newIterator;
     if (exists forcedEncoding) {
         charset = forcedEncoding;
-        newIterator = arr.iterator();
+        newIterator = input.iterator();
     }
     else {
-        value guessResult = guessCharset(arr.iterator());
+        value guessResult = guessCharset(input.iterator());
         charset = guessResult[0];
         newIterator = guessResult[1];
     }
+    
+    "The character encoding used to read the input. Either auto-detected or taken from [[forcedEncoding]]."
     shared String encoding = charset.name;
 
-    value source = PositionPushbackSource(charset.decode(arr).iterator());
+    value source = PositionPushbackSource(charset.decode(input).iterator());
     
+    "The current reading position in the input, in characters, starting at 0."
     shared Integer offset => source.offset;
+    
+    "The line number of the current reading position, starting at 1."
     shared Integer line => source.line;
+    
+    "The column number in the current line, starting at 1."
     shared Integer column => source.column;
     
     MutableMap<String, String> internalEntities = HashMap<String, String>();
@@ -222,6 +255,7 @@ shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding
         }
     }
 
+    "Reads the next portion of the input to return the next XMLEvent or ParseError. Finished after the end of the document."
     shared actual XMLEvent|ParseError|Finished next()
     {
         print(namespaceContext.bindings());
@@ -435,8 +469,8 @@ shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding
                             return startElement;
                         }
                         else {
-                            value name = QName(nameResult[0]);
-                            value attribsMap = map(rr[0].map((attrib) => QName(attrib.key) -> attrib.item));
+                            value name = ExpandedName(nameResult[0]);
+                            value attribsMap = map(rr[0].map((attrib) => ExpandedName(attrib.key) -> attrib.item));
                             parsedEvents.offer(EndElement(name, true));
                             return StartElement(name, true, attribsMap);
                         }
@@ -457,8 +491,8 @@ shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding
                         return StartElement(expandedName, false, attribsMap, nsBindingDeclsAndAttribs[0]);
                     }
                     else {
-                        value name = QName(nameResult[0]);
-                        value attribsMap = map(rr[0].map((attrib) => QName(attrib.key) -> attrib.item));
+                        value name = ExpandedName(nameResult[0]);
+                        value attribsMap = map(rr[0].map((attrib) => ExpandedName(attrib.key) -> attrib.item));
                         elementPath.push(ElementInfo(name, null));
                         return StartElement(name, false, attribsMap);
                     }
@@ -599,7 +633,7 @@ shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding
                 value expectedName = elementPath.pop();
                 assert (exists expectedName);
                 
-                QName name;
+                ExpandedName name;
                 if (namespaceAware) {
                     assert (exists expectedPrefix = expectedName.name.prefix);
                     name = expandName(nameResult[0], true);
@@ -615,7 +649,7 @@ shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding
                     if (expectedName.name.localName != nameResult[0]) {
                         throw ParseException("end tag not matching start tag");
                     }
-                    name = QName(nameResult[0]);
+                    name = ExpandedName(nameResult[0]);
                 }
                 
                 if (exists it = elementPath.top) {
@@ -1297,7 +1331,7 @@ shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding
         }
     }
     
-    QName expandName(String name, Boolean useDefaultNamespace)
+    ExpandedName expandName(String name, Boolean useDefaultNamespace)
     {
         value comps = name.split(':'.equals).sequence();
         value comp0 = comps[0];
@@ -1316,14 +1350,14 @@ shared class XMLEventReader(namespaceAware, {Byte*} arr, Charset? forcedEncoding
             if (!exists namespaceName) {
                 throw ParseException("undefined prefix ``comp0``");
             }
-            return QName(comp1, namespaceName, comp0);
+            return ExpandedName(comp1, namespaceName, comp0);
         }
         else if (useDefaultNamespace) {
             value namespaceName = namespaceContext.top("");
-            return QName(comp0, namespaceName, "");
+            return ExpandedName(comp0, namespaceName, "");
         }
         else {
-            return QName(comp0, null, "");
+            return ExpandedName(comp0, null, "");
         }
     }
 }
