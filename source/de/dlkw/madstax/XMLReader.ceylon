@@ -258,7 +258,6 @@ shared class XMLEventReader(namespaceAware, input, forcedEncoding = null)
     "Reads the next portion of the input to return the next XMLEvent or ParseError. Finished after the end of the document."
     shared actual XMLEvent|ParseError|Finished next()
     {
-        print(namespaceContext.bindings());
         try {
             return internalNext();
         }
