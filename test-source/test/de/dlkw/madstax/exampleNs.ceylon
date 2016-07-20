@@ -1,7 +1,9 @@
 import de.dlkw.madstax {
     XMLEventReader,
     StartElement,
-    ParseError
+    ParseError,
+    Characters,
+    Comment
 }
 import ceylon.buffer.charset {
     utf8
@@ -33,6 +35,21 @@ shared void test2()
             print(x.msg);
             break;
         }
+        
         print(x);
+
+        switch (x)
+        case (is StartElement) {
+            print("using defined attributes: ``x.attributes``");
+        }
+        case (is Characters) {
+            print("using text content: ``x.text``");
+        }
+        case (is Comment) {
+            print("using comment: ``x.comment``");
+        }
+        else {
+            // ignore all others
+        }
     }
 }

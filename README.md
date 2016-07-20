@@ -13,8 +13,11 @@ Namespace support is according to the W3C's [Namespaces in XML 1.0 (Third Editio
 ## Usage
 It defines an Iterator-based API for applications to fetch events similar to StAX, but more object oriented.
 
-A simple use case looks like:
+This might illustrate the usage a bit:
 ```ceylon
+
+shared void test2()
+{
     String xml = "<!-- a test --><ns0:test attr='val' xmlns:ns0='http://madstax.dlkw.de'>some text</ns0:test>";
     value xmlBuf = utf8.encodeBuffer(xml).sequence();
     value r = XMLEventReader(true, xmlBuf);
@@ -23,6 +26,22 @@ A simple use case looks like:
             print(x.msg);
             break;
         }
+        
         print(x);
+
+        switch (x)
+        case (is StartElement) {
+            print("using defined attributes: ``x.attributes``");
+        }
+        case (is Characters) {
+            print("using text content: ``x.text``");
+        }
+        case (is Comment) {
+            print("using comment: ``x.comment``");
+        }
+        else {
+            // ignore all others
+        }
     }
+}
 ```
