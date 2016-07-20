@@ -15,6 +15,17 @@ It defines an Iterator-based API for applications to fetch events similar to StA
 
 This might illustrate the usage a bit:
 ```ceylon
+import ceylon.buffer.charset {
+    utf8
+}
+
+import de.dlkw.madstax {
+    XMLEventReader,
+    StartElement,
+    ParseError,
+    Characters,
+    Comment
+}
 
 shared void dummyUsage()
 {
@@ -44,5 +55,12 @@ shared void dummyUsage()
             // ignore all other events
         }
     }
+}
+```
+
+The minimal module imports (`module.ceylon`) needed for the above example are:
+```ceylon
+module your.module "0.0.1" {
+    import de.dlkw.madstax "0.0.1";
 }
 ```
